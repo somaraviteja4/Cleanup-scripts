@@ -1,0 +1,55 @@
+#!/bin/bash
+USERNAME=$CI_ARTIFACTORY_USER
+PASSWORD=$CI_ARTIFACTORY_PASSWORD
+ARTIFACTORY_DOMAIN=$CI_ARTIFACTORY_DOMAIN
+REPO=$CI_ARTIFACTORY_REPO
+KEEP_LAST_N_VERSIONS=$CI_MAX_REMAINING_VERSIONS
+API_TOKEN=$CI_ARTIFACTORY_TOKEN
+REPO_PATH=$1
+
+# console output colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m'
+
+echo
+printf "******************* ${BLUE}Artifactory Housekeeping jobs${NC} *******************\n"
+printf "*** Artifactory: ${PURPLE}$ARTIFACTORY_DOMAIN${NC}\n"
+printf "*** Repository: ${PURPLE}$REPO${NC}\n"
+printf "*** Path: ${PURPLE}$REPO_PATH${NC}\n"
+printf "*** Keep versions: ${PURPLE}$KEEP_LAST_N_VERSIONS${NC}\n"
+echo
+echo
+
+ALL_ARTIFACTS=$(curl -s -k -u $ARTIFACTORY_USER:$ARTIFACTORY_PWD -X POST \
+    https://$ARTIFACTORY_DOMAIN/artifactory/api/search/aql -H "Content-Type: text/plain" -d \
+    "items.find({\"type\": \"folder\", \"path\": \"$REPO_PATH\", \"repo\":\"$REPO\"})" | grep "name" | awk '{print $3}' | sed 's/"//g' | sed s/,//g)
+
+for ARTIFACT in $ALL_ARTIFACTS; do
+    echo "***** Cleaning artifact ${ARTIFACT} *****"
+    ARTIFACT_PATH=$REPO_PATH/$ARTIFACT
+    
+    # Declare an array for ALL_VERSIONS
+    ALL_VERSIONS=($(curl -s -k -u $ARTIFACTORY_USER:$ARTIFACTORY_PWD -X POST \
+    https://$ARTIFACTORY_DOMAIN/artifactory/api/search/aql -H "Content-Type: text/plain" -d \
+    "items.find({\"path\": \"$ARTIFACT_PATH\", \"repo\":\"$REPO\"}).sort({\"$desc\": [\"created\"]})" | grep "name" | awk '{print $3}' | sed 's/"//g' | sed s/,//g))
+
+    total_versions=${#ALL_VERSIONS[@]}
+    echo "Total number of versions: $total_versions"
+
+    if [ $total_versions -gt $KEEP_LAST_N_VERSIONS ]; then
+        TO_DELETE=(${ALL_VERSIONS[@]:$KEEP_LAST_N_VERSIONS})
+        echo "Versions to be deleted: ${#TO_DELETE[@]}"
+        for VERSION in ${TO_DELETE[@]}; do
+            echo "${RED}Deleting version [${VERSION}]...${NC}"
+            curl -s -k -u $ARTIFACTORY_USER:$ARTIFACTORY_PWD -X DELETE \
+            https://$ARTIFACTORY_DOMAIN/artifactory/$REPO/$ARTIFACT_PATH/$VERSION
+            printf "${PURPLE}Version [${VERSION}] deleted${NC}\n"
+        done
+    else
+        printf "${GREEN}Artifact [${ARTIFACT}] cleaning not needed${NC}\n"
+    fi
+done
+printf "******************* ${BLUE}Artifactory Housekeeping job completed${NC} *******************\n"
